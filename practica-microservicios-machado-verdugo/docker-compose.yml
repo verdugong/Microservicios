@@ -1,0 +1,114 @@
+services:
+  api-gateway:
+    image: nginx:alpine
+    container_name: api-gateway
+    ports:
+      - "8080:80"
+    volumes:
+      - ./api-gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - catalog-service
+      - orders-service
+    networks:
+      - app-net
+
+  frontend:
+    build: ./frontend
+    container_name: frontend
+    networks:
+      - app-net
+
+  catalog-db:
+    image: postgres:15-alpine
+    container_name: catalog-db
+    environment:
+      POSTGRES_DB: catalogdb
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog -d catalogdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - catalog_pgdata:/var/lib/postgresql/data
+    networks:
+      - app-net
+
+  catalog-service:
+    build: ./microservicio-catalogo/catalogo-service
+    container_name: catalog-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://catalog-db:5432/catalogdb
+      SPRING_DATASOURCE_USERNAME: catalog
+      SPRING_DATASOURCE_PASSWORD: catalog
+    depends_on:
+      catalog-db:
+        condition: service_healthy
+    networks:
+      - app-net
+
+  shipping-service:
+    build: ./microservicio-envios/envios-service
+    container_name: shipping-service
+    environment:
+      FLASK_ENV: production
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8082/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-net
+
+  orders-db:
+    image: mariadb:10.11
+    container_name: orders-db
+    environment:
+      MARIADB_DATABASE: ordenesdb
+      MARIADB_USER: ordenes
+      MARIADB_PASSWORD: ordenes
+      MARIADB_ROOT_PASSWORD: root
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - orders_sqldata:/var/lib/mysql
+    networks:
+      - app-net
+
+  orders-service:
+    build: ./microservicio-ordenes/ordenes-service
+    container_name: orders-service
+    environment:
+      DB_URL: jdbc:mariadb://orders-db:3306/ordenesdb
+      DB_USER: ordenes
+      DB_PASSWORD: ordenes
+      CATALOG_URL: http://catalog-service:8081
+      SHIPPING_URL: http://shipping-service:8082
+      QUARKUS_HTTP_PORT: 8083
+    depends_on:
+      orders-db:
+        condition: service_healthy
+      shipping-service:
+        condition: service_started
+      catalog-service:
+        condition: service_started
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/q/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  app-net:
+    driver: bridge
+
+volumes:
+  catalog_pgdata:
+  orders_sqldata:
